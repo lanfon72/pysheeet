@@ -1,4 +1,4 @@
-Python SQLAlchemy Chatsheet
+Python SQLAlchemy Cheatsheet
 =============================
 
 Set a database URL
@@ -871,6 +871,91 @@ output:
     <__main__.User object at 0x10c4ed810>
 
 
+Object Relational self association
+-----------------------------------
+
+.. code-block:: python
+
+    import json
+
+    from sqlalchemy import (
+        Column,
+        Integer,
+        String,
+        ForeignKey,
+        Table)
+
+    from sqlalchemy.orm import (
+        sessionmaker,
+        relationship)
+
+    from sqlalchemy.ext.declarative import declarative_base
+
+    base = declarative_base()
+
+    association = Table("Association", base.metadata,
+        Column('left', Integer, ForeignKey('node.id'), primary_key=True),
+        Column('right', Integer, ForeignKey('node.id'), primary_key=True))
+
+    class Node(base):
+        __tablename__ = 'node'
+        id = Column(Integer, primary_key=True)
+        label = Column(String)
+        friends = relationship('Node',
+                               secondary=association,
+                               primaryjoin=id==association.c.left,
+                               secondaryjoin=id==association.c.right,
+                               backref='left')
+        def to_json(self):
+            return dict(id=self.id,
+                        friends=[_.label for _ in self.friends])
+
+    nodes = [Node(label='node_{}'.format(_)) for _ in range(0, 3)]
+    nodes[0].friends.extend([nodes[1], nodes[2]])
+    nodes[1].friends.append(nodes[2])
+
+    print('----> right')
+    print(json.dumps([_.to_json() for _ in nodes], indent=2))
+
+    print('----> left')
+    print(json.dumps([_n.to_json() for _n in nodes[1].left], indent=2))
+
+output:
+
+.. code-block:: bash
+
+    ----> right
+    [
+      {
+        "friends": [
+          "node_1",
+          "node_2"
+        ],
+        "id": null
+      },
+      {
+        "friends": [
+          "node_2"
+        ],
+        "id": null
+      },
+      {
+        "friends": [],
+        "id": null
+      }
+    ]
+    ----> left
+    [
+      {
+        "friends": [
+          "node_1",
+          "node_2"
+        ],
+        "id": null
+      }
+    ]
+
+
 Object Relational basic query
 ------------------------------
 
@@ -1174,7 +1259,7 @@ Get table dynamically
             table.create(engine)
 
         cls = type(name.title(), (TableTemp,), {})
-        mapper(cls, table)    
+        mapper(cls, table)
         return cls
 
     # get table first times
@@ -1391,3 +1476,113 @@ output:
     $ python sqlalchemy_dynamic_orm.py
     Table1
     Table2
+
+
+Close database connection
+--------------------------
+
+.. code-block:: python
+
+    from sqlalchemy import (
+        create_engine,
+        event,
+        Column,
+        Integer)
+
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.ext.declarative import declarative_base
+
+    engine = create_engine('sqlite://')
+    base = declarative_base()
+
+    @event.listens_for(engine, 'engine_disposed')
+    def receive_engine_disposed(engine):
+        print("engine dispose")
+
+    class Table(base):
+        __tablename__ = 'example table'
+        id = Column(Integer, primary_key=True)
+
+    base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+
+    try:
+        try:
+            row = Table()
+            session.add(row)
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    finally:
+        engine.dispose()
+
+output:
+
+.. code-block:: bash
+
+    $ python db_dispose.py
+    engine dispose
+
+.. warning::
+
+    Be careful. Close *session* does not mean close database connection.
+    SQLAlchemy *session* generally represents the *transactions*, not connections.
+
+
+Cannot use the object after close the session
+-----------------------------------------------
+
+.. code-block:: python
+
+    from __future__ import print_function
+
+    from sqlalchemy import (
+        create_engine,
+        Column,
+        String,
+        Integer)
+
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.ext.declarative import declarative_base
+
+
+    url = 'sqlite://'
+    engine = create_engine(url)
+    base = declarative_base()
+
+    class Table(base):
+        __tablename__ = 'table'
+        id  = Column(Integer, primary_key=True)
+        key = Column(String)
+        val = Column(String)
+
+    base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+
+    try:
+        t = Table(key="key", val="val")
+        try:
+            print(t.key, t.val)
+            session.add(t)
+            session.commit()
+        except Exception as e:
+            print(e)
+            session.rollback()
+        finally:
+            session.close()
+
+        print(t.key, t.val) # exception raise from here
+    except Exception as e:
+        print("Cannot use the object after close the session")
+    finally:
+        engine.dispose()
+
+output:
+
+.. code-block:: bash
+
+    $ python sql.py
+    key val
+    Cannot use the object after close the session

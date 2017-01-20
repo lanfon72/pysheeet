@@ -132,7 +132,7 @@ html_theme_options = {
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
-#html_title = None
+html_title = "pysheeet"
 
 # A shorter title for the navigation bar.  Default is the same as html_title.
 #html_short_title = None
@@ -166,11 +166,19 @@ html_static_path = ['_static']
 
 # Custom sidebar templates, maps document names to template names.
 html_sidebars = {
+    'index': [
+        'sidebarintro.html',
+        'link.html',
+        'relations.html',
+        'github.html',
+        'searchbox.html'
+    ],
     '**': [
+        'sidebarintro.html',
+        'link.html',
+        'github.html',
         'localtoc.html',
         'relations.html',
-        'sourcelink.html',
-        'github.html',
         'searchbox.html'
     ]
 }

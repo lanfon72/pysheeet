@@ -2,6 +2,25 @@
 Python Concurrency Cheatsheet
 =============================
 
+Execute a shell command
+------------------------
+
+.. code-block:: python
+
+    # get stdout, stderr, returncode
+
+    >>> from subprocess import Popen, PIPE
+    >>> args = ['time', 'echo', 'hello python']
+    >>> ret = Popen(args, stdout=PIPE, stderr=PIPE)
+    >>> out, err = ret.communicate()
+    >>> out
+    b'hello python\n'
+    >>> err
+    b'        0.00 real         0.00 user         0.00 sys\n'
+    >>> ret.returncode
+    0
+
+
 Create a thread via "threading"
 -------------------------------
 
@@ -38,7 +57,7 @@ Performance Problem - GIL
 .. code-block:: python
 
     # GIL - Global Interpreter Lock
-    # see: Ungerstanging the Python GIL
+    # see: Understanding the Python GIL
     >>> from threading import Thread
     >>> def profile(func):
     ...   def wrapper(*args, **kwargs):
@@ -100,7 +119,7 @@ Consumer and Producer
     >>> t2 = Thread(target=consumer)
     >>> t1.start();t2.start()
 
-Thread Pool Templeate
+Thread Pool Template
 ---------------------
 
 .. code-block:: python
@@ -194,7 +213,7 @@ output:
 
 .. code-block:: console
 
-    $ python test_theadpool.py
+    $ python test_threadpool.py
     pool_map
     cost: 0.562669038773
     ordinary_map
@@ -534,6 +553,40 @@ Custom multiprocessing map
         return [p.recv() for (p,c) in pipe]
 
     print parmap(lambda x:x**x,range(1,5))
+
+
+Graceful way to kill all child processes
+-----------------------------------------
+
+.. code-block:: python
+
+    from __future__ import print_function
+
+    import signal
+    import os
+    import time
+
+    from multiprocessing import Process, Pipe
+
+    NUM_PROCESS = 10
+
+    def aurora(n):
+        while True:
+            time.sleep(n)
+
+    if __name__ == "__main__":
+        procs = [Process(target=aurora, args=(x,))
+                    for x in range(NUM_PROCESS)]
+        try:
+            for p in procs:
+                p.daemon = True
+                p.start()
+            [p.join() for p in procs]
+        finally:
+            for p in procs:
+                if not p.is_alive(): continue
+                os.kill(p.pid, signal.SIGKILL)
+
 
 Simple round-robin scheduler
 ----------------------------

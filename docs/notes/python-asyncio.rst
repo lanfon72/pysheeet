@@ -168,12 +168,12 @@ What event loop doing? (Without polling)
             """Run task at once"""
             ntodo = len(self._ready)
             for i in range(ntodo):
-                t, a = self._ready.popleft() 
+                t, a = self._ready.popleft()
                 t(*a)
 
         def stop(self):
             self._stopping = True
-            
+
         def close(self):
             self._ready.clear()
 
@@ -195,13 +195,77 @@ What event loop doing? (Without polling)
             asyncio.wait(tasks))
     loop.close()
 
- output:
+output:
 
 .. code-block:: console
 
     $ python test.py
-    Foo 
+    Foo
     Bar
+
+
+What ``asyncio.wait`` doing?
+-----------------------------
+
+.. code-block:: python
+
+    import asyncio
+
+    async def wait(fs, loop=None):
+        fs = {asyncio.ensure_future(_) for _ in set(fs)}
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        waiter = loop.create_future()
+        counter = len(fs)
+
+        def _on_complete(f):
+            nonlocal counter
+            counter -= 1
+            if counter <= 0 and not waiter.done():
+                 waiter.set_result(None)
+
+        for f in fs:
+            f.add_done_callback(_on_complete)
+
+        # wait all tasks done
+        await waiter
+
+        done, pending = set(), set()
+        for f in fs:
+            f.remove_done_callback(_on_complete)
+            if f.done():
+                done.add(f)
+            else:
+                pending.add(f)
+        return done, pending
+
+    async def slow_task(n):
+        await asyncio.sleep(n)
+        print('sleep "{}" sec'.format(n))
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        print("---> wait")
+        loop.run_until_complete(
+                wait([slow_task(_) for _ in range(1,3)]))
+        print("---> asyncio.wait")
+        loop.run_until_complete(
+                asyncio.wait([slow_task(_) for _ in range(1,3)]))
+    finally:
+        loop.close()
+
+output:
+
+.. code-block:: bash
+
+    ---> wait
+    sleep "1" sec
+    sleep "2" sec
+    ---> asyncio.wait
+    sleep "1" sec
+    sleep "2" sec
 
 
 Future like object
@@ -353,7 +417,7 @@ output: (bash 1)
 
     $ nc localhost 9527
     Hello
-    Hello 
+    Hello
 
 output: (bash 2)
 
@@ -361,7 +425,7 @@ output: (bash 2)
 
     $ nc localhost 9527
     World
-    World 
+    World
 
 
 Event Loop with polling
@@ -389,7 +453,7 @@ Event Loop with polling
         """Simple loop prototype"""
 
         def __init__(self):
-            self.ready = deque() 
+            self.ready = deque()
             self.selector = selectors.DefaultSelector()
 
         @asyncio.coroutine
@@ -404,7 +468,7 @@ Event Loop with polling
 
         @asyncio.coroutine
         def sock_sendall(self, c, m):
-            while m: 
+            while m:
                 yield from write_wait(c)
                 nsent = c.send(m)
                 m = m[nsent:]
@@ -647,15 +711,15 @@ Inline callback
     >>> async def foo():
     ...     await asyncio.sleep(1)
     ...     return "foo done"
-    ... 
+    ...
     >>> async def bar():
     ...     await asyncio.sleep(.5)
     ...     return "bar done"
-    ... 
+    ...
     >>> async def ker():
     ...     await asyncio.sleep(3)
     ...     return "ker done"
-    ... 
+    ...
     >>> async def task():
     ...     res = await foo()
     ...     print(res)
@@ -663,7 +727,7 @@ Inline callback
     ...     print(res)
     ...     res = await ker()
     ...     print(res)
-    ... 
+    ...
     >>> loop = asyncio.get_event_loop()
     >>> loop.run_until_complete(task())
     foo done
@@ -695,7 +759,7 @@ Asynchronous Iterator
     ...     it = [1,2,3]
     ...     async for _ in AsyncIter(it):
     ...         print(_)
-    ... 
+    ...
     >>> loop = asyncio.get_event_loop()
     >>> loop.run_until_complete(foo())
     1
@@ -758,7 +822,7 @@ Asynchronous context manager
     >>> async def hello():
     ...     async with AsyncCtxMgr() as m:
     ...         print("hello block")
-    ... 
+    ...
     >>> async def world():
     ...     print("world block")
     ...
@@ -844,7 +908,7 @@ What `loop.sock_*` do?
         if fut is None:
             fut = self.create_future()
         if registed:
-            self.remove_reader(fd)
+            self.remove_writer(fd)
         try:
             n = sock.send(data)
         except (BlockingIOError, InterruptedError):
@@ -907,6 +971,219 @@ output:
     asyncio
 
 
+Simple asyncio connection pool
+-------------------------------
+
+.. code-block:: python
+
+    import asyncio
+    import socket
+    import uuid
+
+    class Transport:
+
+        def __init__(self, loop, host, port):
+            self.used = False
+
+            self._loop = loop
+            self._host = host
+            self._port = port
+            self._sock = socket.socket(
+                    socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.setblocking(False)
+            self._uuid = uuid.uuid1()
+
+        async def connect(self):
+            loop, sock = self._loop, self._sock
+            host, port = self._host, self._port
+            return (await loop.sock_connect(sock, (host, port)))
+
+        async def sendall(self, msg):
+            loop, sock = self._loop, self._sock
+            return (await loop.sock_sendall(sock, msg))
+
+        async def recv(self, buf_size):
+            loop, sock = self._loop, self._sock
+            return (await loop.sock_recv(sock, buf_size))
+
+        def close(self):
+            if self._sock: self._sock.close()
+
+        @property
+        def alive(self):
+            ret = True if self._sock else False
+            return ret
+
+        @property
+        def uuid(self):
+            return self._uuid
+
+
+    class ConnectionPool:
+
+        def __init__(self, loop, host, port, max_conn=3):
+            self._host = host
+            self._port = port
+            self._max_conn = max_conn
+            self._loop = loop
+
+            conns = [Transport(loop, host, port) for _ in range(max_conn)]
+            self._conns = conns
+
+        def __await__(self):
+            for _c in self._conns:
+                yield from _c.connect().__await__()
+            return self
+
+        def getconn(self, fut=None):
+            if fut is None:
+                fut = self._loop.create_future()
+
+            for _c in self._conns:
+                if _c.alive and not _c.used:
+                    _c.used = True
+                    fut.set_result(_c)
+                    break
+            else:
+                loop.call_soon(self.getconn, fut)
+
+            return fut
+
+        def release(self, conn):
+            if not conn.used:
+                return
+            for _c in self._conns:
+                if _c.uuid != conn.uuid:
+                    continue
+                _c.used = False
+                break
+
+        def close(self):
+            for _c in self._conns:
+                _c.close()
+
+
+    async def handler(pool, msg):
+        conn = await pool.getconn()
+        byte = await conn.sendall(msg)
+        mesg = await conn.recv(1024)
+        pool.release(conn)
+        return 'echo: {}'.format(mesg)
+
+
+    async def main(loop, host, port):
+        try:
+            # creat connection pool
+            pool = await ConnectionPool(loop, host, port)
+
+            # generate messages
+            msgs = ['coro_{}'.format(_).encode('utf-8') for _ in range(5)]
+
+            # create tasks
+            fs = [loop.create_task(handler(pool, _m)) for _m in msgs]
+
+            # wait all tasks done
+            done, pending = await asyncio.wait(fs)
+            for _ in done: print(_.result())
+        finally:
+            pool.close()
+
+
+    loop = asyncio.get_event_loop()
+    host = '127.0.0.1'
+    port = 9527
+
+    try:
+        loop.run_until_complete(main(loop, host, port))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
+
+output:
+
+.. code-block:: bash
+
+    $ ncat -l 9527 --keep-open --exec "/bin/cat" &
+    $ python3 conn_pool.py
+    echo: b'coro_1'
+    echo: b'coro_0'
+    echo: b'coro_2'
+    echo: b'coro_3'
+    echo: b'coro_4'
+
+
+Simple asyncio UDP echo server
+--------------------------------
+
+.. code-block:: python
+
+    import asyncio
+    import socket
+
+    loop = asyncio.get_event_loop()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setblocking(False)
+
+    host = 'localhost'
+    port = 3553
+
+    sock.bind((host, port))
+
+    def recvfrom(loop, sock, n_bytes, fut=None, registed=False):
+        fd = sock.fileno()
+        if fut is None:
+            fut = loop.create_future()
+        if registed:
+            loop.remove_reader(fd)
+
+        try:
+            data, addr = sock.recvfrom(n_bytes)
+        except (BlockingIOError, InterruptedError):
+            loop.add_reader(fd, recvfrom, loop, sock, n_bytes, fut, True)
+        else:
+            fut.set_result((data, addr))
+        return fut
+
+    def sendto(loop, sock, data, addr, fut=None, registed=False):
+        fd = sock.fileno()
+        if fut is None:
+            fut = loop.create_future()
+        if registed:
+            loop.remove_writer(fd)
+        if not data:
+            return
+
+        try:
+            n = sock.sendto(data, addr)
+        except (BlockingIOError, InterruptedError):
+            loop.add_writer(fd, sendto, loop, sock, data, addr, fut, True)
+        else:
+            fut.set_result(n)
+        return fut
+
+    async def udp_server(loop, sock):
+        while True:
+            data, addr = await recvfrom(loop, sock, 1024)
+            n_bytes = await sendto(loop, sock, data, addr)
+
+    try:
+        loop.run_until_complete(udp_server(loop, sock))
+    finally:
+        loop.close()
+
+output:
+
+.. code-block:: bash
+
+    $ python3 udp_server.py
+    $ nc -u localhost 3553
+    Hello UDP
+    Hello UDP
+
+
 Simple asyncio web server
 -------------------------
 
@@ -926,8 +1203,8 @@ Simple asyncio web server
     loop = asyncio.get_event_loop()
 
     def make_header():
-        header  = b"HTTP/1.1 200 OK\r\n" 
-        header += b"Content-Type: text/html\r\n" 
+        header  = b"HTTP/1.1 200 OK\r\n"
+        header += b"Content-Type: text/html\r\n"
         header += b"\r\n"
         return header
 
@@ -1075,7 +1352,7 @@ output:
 
     $ openssl genrsa -out root-ca.key 2048
     $ openssl req -x509 -new -nodes -key root-ca.key -days 365 -out root-ca.crt
-    $ python Simple_https_server.py
+    $ python3 Simple_https_server.py
 
     # console 2
 
@@ -1116,7 +1393,7 @@ Simple asyncio WSGI web server
             self._header = []
 
         def parse_request(self, req):
-            """ HTTP Request Format: 
+            """ HTTP Request Format:
 
             GET /hello.htm HTTP/1.1\r\n
             Accept-Language: en-us\r\n
@@ -1144,8 +1421,8 @@ Simple asyncio WSGI web server
             # Required CGI variables
             env['REQUEST_METHOD']    = method    # GET
             env['PATH_INFO']         = path      # /hello
-            env['SERVER_NAME']       = host      # localhost 
-            env['SERVER_PORT']       = str(port) # 9527 
+            env['SERVER_NAME']       = host      # localhost
+            env['SERVER_PORT']       = str(port) # 9527
             return env
 
         def start_response(self, status, resp_header, exc_info=None):

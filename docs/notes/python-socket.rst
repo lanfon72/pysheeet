@@ -16,6 +16,36 @@ Get Hostname
     >>> socket.gethostbyname('localhost')
     '127.0.0.1'
 
+Transform Host & Network Endian
+--------------------------------
+
+.. code-block:: python
+
+    # little-endian machine
+    >>> import socket
+    >>> a = 1 # host endian
+    >>> socket.htons(a) # network endian
+    256
+    >>> socket.htonl(a) # network endian
+    16777216
+    >>> socket.ntohs(256) # host endian
+    1
+    >>> socket.ntohl(16777216) # host endian
+    1
+
+    # big-endian machine
+    >>> import socket
+    >>> a = 1 # host endian
+    >>> socket.htons(a) # network endian
+    1
+    >>> socket.htonl(a) # network endian
+    1L
+    >>> socket.ntohs(1) # host endian
+    1
+    >>> socket.ntohl(1) # host endian
+    1L
+
+
 IP dotted-quad string & byte format convert
 -------------------------------------------
 
@@ -306,6 +336,52 @@ output:
     $ nc -U ./domain.sock
     Hello
     Hello
+
+
+Simple duplex processes communication
+---------------------------------------
+
+.. code-block:: python
+
+    import os
+    import socket
+
+    child, parent = socket.socketpair()
+    pid = os.fork()
+    try:
+
+        if pid == 0:
+            print('chlid pid: {}'.format(os.getpid()))
+
+            child.send(b'Hello Parent')
+            msg = child.recv(1024)
+            print('p[{}] ---> c[{}]: {}'.format(
+                os.getppid(), os.getpid(), msg))
+        else:
+            print('parent pid: {}'.format(os.getpid()))
+
+            # simple echo server (parent)
+            msg = parent.recv(1024)
+            print('c[{}] ---> p[{}]: {}'.format(
+                    pid, os.getpid(), msg))
+            parent.send(msg)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        child.close()
+        parent.close()
+
+output:
+
+.. code-block:: bash
+
+    $ python3 socketpair_demo.py
+    parent pid: 9497
+    chlid pid: 9498
+    c[9498] ---> p[9497]: b'Hello Parent'
+    p[9497] ---> c[9498]: b'Hello Parent'
+
 
 Simple Asynchronous TCP Server - Thread
 ---------------------------------------
